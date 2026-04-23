@@ -8,14 +8,12 @@ import time
 devices = serial.tools.list_ports.comports()
 ser = serial.Serial("COM3", 115200, timeout=1)
 
-#we want this in the processing stm - so in c!! ###############################
 audio = []
 
 SAMPLE_RATE = 9500
 start_time = time.time()
 
 for i in range(5*SAMPLE_RATE):
-    #instead of this, it receives from uart1
     read_data = ser.read(1)
 
     print(read_data[0])
@@ -24,11 +22,19 @@ for i in range(5*SAMPLE_RATE):
 data = np.array(audio)
 print(data)
 
+#we want this in the processing stm - so in c!! ###############################
+
+#data is received from the sampling stm
+
+#add moving average here
+
+#scaling
 data = (data - data.min() / data.max())
 data = data * 255
 data = data.astype(np.uint8)
 
 #then transmit to computer via uart2
+#the ser.read in line 18 would be picking up this^
 
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
