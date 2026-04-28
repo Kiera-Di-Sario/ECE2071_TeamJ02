@@ -10,7 +10,7 @@ ser = serial.Serial("COM9", 115200, timeout=1)
 
 audio = []
 
-SAMPLE_RATE = 6500 
+SAMPLE_RATE = 9200 
 
 for i in range(5*SAMPLE_RATE):
     read_data = ser.read(1)
