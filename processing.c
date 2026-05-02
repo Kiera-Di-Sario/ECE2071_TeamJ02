@@ -46,6 +46,9 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 uint8_t data[1];
+uint8_t current = 0;
+uint8_t prev = 0;
+uint8_t avg = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -101,8 +104,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  HAL_SPI_Receive(&hspi1, data, 1, HAL_MAX_DELAY);
-	  HAL_UART_Transmit(&huart2, data, 1, 10);
     /* USER CODE END WHILE */
     /* USER CODE BEGIN 3 */
   }
@@ -276,15 +277,19 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-uint8_t prev = 0;
+
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
     if (hspi->Instance == SPI1) {
-    	HAL_SPI_Receive_IT(&hspi1, data, 1);
-    	uint8_t avg = (data[0] + prev) / 2;
-    	prev = data[0];
-    	HAL_UART_Transmit(&huart2, &avg, 1, 1);
-    	HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
-    }
+            prev = current;
+            current = data[0];
+
+            avg = (current + prev) / 2;
+
+            HAL_UART_Transmit_IT(&huart2, &avg, 1);
+            HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+
+            HAL_SPI_Receive_IT(&hspi1, data, 1);
+        }
 }
 /* USER CODE END 4 */
 
