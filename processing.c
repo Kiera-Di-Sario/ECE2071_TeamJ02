@@ -42,13 +42,31 @@
 /* Private variables ---------------------------------------------------------*/
 SPI_HandleTypeDef hspi1;
 
+TIM_HandleTypeDef htim16;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 uint8_t data[1];
+uint8_t uartData[1];
+
 uint8_t current = 0;
 uint8_t prev = 0;
 uint8_t avg = 0;
+
+volatile int triggerMode = 0;
+volatile int transmit = 0;
+
+volatile int echoState = 0;
+volatile uint32_t riseTime = 0;
+volatile uint32_t fallTime = 0;
+
+volatile float distance = 0;
+
+volatile int triggerRequest = 0;
+volatile uint32_t lastTrigger = 0;
+
+int counter_for_debugging = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -56,12 +74,54 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+//activates every time the echo pin changes state
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == Echo_Pin) {
+        uint32_t now = __HAL_TIM_GET_COUNTER(&htim16);
+
+        if (echoState == 0) {
+            //starts on low -> must be rising edge
+            riseTime = now;
+            echoState = 1;
+        } else {
+            //must be falling edge, because it was already high
+            fallTime = now;
+
+            uint16_t pulse = fallTime - riseTime;
+
+            distance = pulse/58;
+            echoState = 0; //reset
+        }
+    }
+}
+
+void send_trigger(void){
+    HAL_GPIO_WritePin(Trigger_GPIO_Port, Trigger_Pin, 1);
+
+    //schedule turning the trigger off in 10 microseconds
+    lastTrigger = __HAL_TIM_GET_COUNTER(&htim16);
+    triggerRequest = 1;
+}
+void process_trigger(void) {
+    if (triggerRequest) {
+        uint32_t now = __HAL_TIM_GET_COUNTER(&htim16);
+
+        //turn the trigger off if 10 microseconds have passed
+        //creates pulse to be echoed
+        if ((uint16_t)(now - lastTrigger) >= 10) {
+            HAL_GPIO_WritePin(Trigger_GPIO_Port, Trigger_Pin, 0);
+            triggerRequest = 0;
+        }
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -96,15 +156,77 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
+  MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
   HAL_SPI_Receive_IT(&hspi1, data, 1);
+  HAL_UART_Receive_IT(&huart2, uartData, 1);
+  HAL_TIM_Base_Start(&htim16);
+
+  uint32_t last_cycle = 0;
+  int closeCount = 0;
+  int farCount = 0;
+
+  int recordingStart = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  //only operate in distance trigger mode if python sends signal
+	  if (triggerMode == 1){
+
+		  //shut off trigger to create pulse
+		  process_trigger();
+
+	      uint32_t now = __HAL_TIM_GET_COUNTER(&htim16);
+
+	      //begin making trigger pulse every 60ms
+	      if ((uint16_t)(now - last_cycle) >= 60000){
+	          send_trigger();
+	          last_cycle = now;
+	      }
+
+	      //set recording state if distance is short enough
+	      //debounce logic: need 8 consecutive values to verify change of distance, to counteract spiking
+	      if (distance < 10) {
+	    	  closeCount++;
+	    	  farCount = 0;
+
+	    	  if (closeCount >= 8){
+	    		  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 1);
+	    		  transmit = 1;
+
+	    		  if (recordingStart == 0){
+	    			  uint8_t num = 1;
+	    			  HAL_UART_Transmit_IT(&huart2, &num, 1);
+
+	    			  recordingStart = 1;
+	    		  }
+	    	  }
+	      } else{
+	    	  farCount++;
+	    	  closeCount = 0;
+
+	    	  if (farCount >= 8){
+	    		  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 0);
+	    		  transmit = 0;
+
+	    		  if (recordingStart == 1){
+					  //tell python to end recording period
+	    			  uint8_t num = 4;
+	    			  HAL_UART_Transmit_IT(&huart2, &num, 1);
+
+					  recordingStart = 0;
+	    		  }
+	    	  }
+	      }
+	  } else{
+		  //light for debugging
+		  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 0);
+	  }
     /* USER CODE END WHILE */
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -210,6 +332,38 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief TIM16 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM16_Init(void)
+{
+
+  /* USER CODE BEGIN TIM16_Init 0 */
+
+  /* USER CODE END TIM16_Init 0 */
+
+  /* USER CODE BEGIN TIM16_Init 1 */
+
+  /* USER CODE END TIM16_Init 1 */
+  htim16.Instance = TIM16;
+  htim16.Init.Prescaler = 31;
+  htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim16.Init.Period = 65535;
+  htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim16.Init.RepetitionCounter = 0;
+  htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim16) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM16_Init 2 */
+
+  /* USER CODE END TIM16_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -262,7 +416,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(Trigger_GPIO_Port, Trigger_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : Trigger_Pin */
+  GPIO_InitStruct.Pin = Trigger_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(Trigger_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD3_Pin */
   GPIO_InitStruct.Pin = LD3_Pin;
@@ -270,6 +434,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD3_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : Echo_Pin */
+  GPIO_InitStruct.Pin = Echo_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(Echo_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -285,11 +459,35 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 
             avg = (current + prev) / 2;
 
-            HAL_UART_Transmit_IT(&huart2, &avg, 1);
-            HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+            //in trigger mode, only transmit if distance requirements met
+            if (triggerMode == 1){
+            	if (transmit == 1) {
+            		//HAL_UART_Transmit_IT(&huart2, &avg, 1);
+
+            		//for debugging
+	    			uint8_t num = 2;
+					HAL_UART_Transmit_IT(&huart2, &num, 2);
+            	}
+
+            } else { //in manual, always transmit
+            	HAL_UART_Transmit_IT(&huart2, &avg, 1);
+            }
+
+            //HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 
             HAL_SPI_Receive_IT(&hspi1, data, 1);
         }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART2) {
+    	HAL_UART_Receive_IT(&huart2, uartData, 1);
+    	if (uartData[0] == 1){
+    		triggerMode = 1;
+    	} else if (uartData[0] == 0){
+    		triggerMode = 0;
+    	}
+    }
 }
 /* USER CODE END 4 */
 
