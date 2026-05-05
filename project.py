@@ -6,10 +6,10 @@ import wave
 import time
 
 devices = serial.tools.list_ports.comports()
-ser = serial.Serial("COM4", 115200, timeout=1)
+ser = serial.Serial("COM4", 230400, timeout=1)
 
 audio = []
-SAMPLE_RATE = 5000 
+SAMPLE_RATE = 9750 
 
 def to_wav(data, ver = -1):
     '''
@@ -50,9 +50,11 @@ def to_png(data, recordingLength, ver = -1):
     timeAxis = np.linspace(0, recordingLength, arrayLength)
     plt.figure() 
     plt.plot(timeAxis, data)
+
     plt.xlabel("Time (s)")
     plt.ylabel("Amplitude (ADC counts)")
     plt.title("Waveform of Time VS Amplitude")
+    plt.ylim(0, 255)
 
     if ver == -1:
         plt.savefig("waveform.png")
@@ -81,15 +83,16 @@ recordingType = input("Recording type (m for manual, d for distance): ")
 if recordingType == "m":
     recordingLength = int(input("Recording time (s): "))
 
+    ser.reset_input_buffer()
+    time.sleep(0.2)
+
     for i in range(recordingLength*SAMPLE_RATE):
         readData = ser.read(1) 
-
-        #actual code
+        print(readData[0])
         audio.append(readData[0])
+        
     
     data = np.array(audio)
-    print(data)
-
 
     if outputType == "w":
         to_wav(data)
@@ -101,28 +104,31 @@ if recordingType == "m":
         print("Invalid output type.")
 
 elif recordingType == "d":
+
     ser.write(bytes([1]))
     state = "not accepting"
     fileCounter = 0
 
     try:
+        time.sleep(2.5) #make sure stm is sending nothing
+        ser.reset_input_buffer()
         while True: #loop until keyboard interrupt
             
             #wait for start bit
             while state == "not accepting":
                 readData = ser.read(1)
 
-
-                #wait for US range
-                if readData[0] == 1:
+                #wait for STM to send first value
+                if readData != b'':
                     state = "accepting data"
+                    startTime = time.time()
+                    audio.append(readData[0])
 
-            #wait for stop bit
-            startTime = time.time()
+            #wait for STM to stop sending data
             while state == "accepting data":
                 readData = ser.read(1)
 
-                if readData[0] == 4:
+                if readData == b'':
                     endTime = time.time()
                     state = "not accepting"
                     
@@ -143,7 +149,6 @@ elif recordingType == "d":
                     startTime = time.time()
                     
                     break
-
                 else:
                     audio.append(readData[0])
 
