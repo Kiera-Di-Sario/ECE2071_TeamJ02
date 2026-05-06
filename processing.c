@@ -53,6 +53,9 @@ static uint8_t  filterIdx  = 0;
 static uint16_t filterSum  = 0;
 static uint8_t  filterCount = 0;
 static uint8_t  prevSample = 128;   /* last accepted sample, used for spike detection */
+
+/* FIX: Added a static variable for UART transmission to prevent memory corruption */
+static uint8_t  avg_out = 0; 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -305,9 +308,10 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
         filterIdx = (filterIdx + 1) % FILTER_SIZE;
         if (filterCount < FILTER_SIZE) filterCount++;
 
-        uint8_t avg = (uint8_t)(filterSum / filterCount);
+        /* FIX: Store the calculation in the static variable before passing to UART */
+        avg_out = (uint8_t)(filterSum / filterCount);
 
-        HAL_UART_Transmit_IT(&huart2, &avg, 1);
+        HAL_UART_Transmit_IT(&huart2, &avg_out, 1);
         HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 
         HAL_SPI_Receive_IT(&hspi1, data, 1);

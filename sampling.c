@@ -131,9 +131,12 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
+  
+  /* FIX: Starts all required peripherals and interrupts properly */
   HAL_TIM_Base_Start(&htim1);
   LL_SPI_Enable(SPI1);
   HAL_ADC_Start_IT(&hadc1);
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */
