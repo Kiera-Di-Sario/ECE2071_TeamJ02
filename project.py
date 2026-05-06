@@ -1,15 +1,23 @@
 import numpy as np
 import matplotlib.pyplot as plt
+
 import serial
 import serial.tools.list_ports
+
 import wave
+
 import time
 
+
 devices = serial.tools.list_ports.comports()
-ser = serial.Serial("COM4", 230400, timeout=1)
+ser = serial.Serial("COM5", 230400, timeout=0.2)
 
 audio = []
-SAMPLE_RATE = 9750 
+SAMPLE_RATE = 7900 
+
+#first output file will be triggered by data still being sent before python tells it to stop
+#it should be discarded
+distanceFirst = 0
 
 def to_wav(data, ver = -1):
     '''
@@ -84,11 +92,11 @@ if recordingType == "m":
     recordingLength = int(input("Recording time (s): "))
 
     ser.reset_input_buffer()
-    time.sleep(0.2)
+    time.sleep(0.5)
 
     for i in range(recordingLength*SAMPLE_RATE):
         readData = ser.read(1) 
-        print(readData[0])
+        #print(readData[0])
         audio.append(readData[0])
         
     
@@ -110,8 +118,10 @@ elif recordingType == "d":
     fileCounter = 0
 
     try:
-        time.sleep(2.5) #make sure stm is sending nothing
+        print("Initialising...")
+        time.sleep(2.7) #make sure stm is sending nothing
         ser.reset_input_buffer()
+        print("Ready!")
         while True: #loop until keyboard interrupt
             
             #wait for start bit
@@ -131,6 +141,10 @@ elif recordingType == "d":
                 if readData == b'':
                     endTime = time.time()
                     state = "not accepting"
+
+                    if distanceFirst == 0:
+                        distanceFirst = 1
+                        break
                     
                     data = np.array(audio)
 
