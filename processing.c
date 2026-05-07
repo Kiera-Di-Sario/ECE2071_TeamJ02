@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdlib.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,14 +40,11 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc1;
-DMA_HandleTypeDef hdma_adc1;
-
 SPI_HandleTypeDef hspi1;
-DMA_HandleTypeDef hdma_spi1_tx;
+DMA_HandleTypeDef hdma_spi1_rx;
 
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim16;
 
 UART_HandleTypeDef huart2;
 
@@ -58,8 +55,25 @@ volatile uint16_t buffer[BUFF_SIZE];
 volatile uint16_t head = 0;  //writing
 volatile uint16_t tail = 0;  //reading
 
-uint32_t data[1];
-uint8_t spi_tx[2];
+uint16_t lastValid = 512;
+uint16_t runningMean = 512;
+uint16_t prevAvg = 0;
+
+uint8_t data[2];
+uint8_t uartData[1];
+volatile uint8_t tx;
+
+volatile uint8_t triggerMode = 0;
+volatile uint8_t transmit = 0;
+
+volatile int echoState = 0;
+volatile uint32_t riseTime = 0;
+volatile uint32_t fallTime = 0;
+
+volatile int distance = 0;
+
+volatile uint8_t triggerRequest = 0;
+volatile uint32_t lastTrigger = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -67,30 +81,97 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_ADC1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM1_Init(void);
-static void MX_TIM2_Init(void);
+static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+//circular buffer to prevent data loss (not perfectly synchronised)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
-    if (htim->Instance == TIM2) {
+    if (htim->Instance == TIM1) {
+
+        //unread sample in the queue
         if (tail != head) {
 
-            //get first sample
-            uint16_t sample = buffer[tail];
-            spi_tx[0] = (uint8_t)((sample >> 8) & 0xFF);
-            spi_tx[1] = (uint8_t)(sample & 0xFF);
+            //read first sample
+            uint16_t first = buffer[tail];
             //set the tail to the next position
             tail = (tail + 1) % BUFF_SIZE;
 
-            if (hspi1.State == HAL_SPI_STATE_READY) {
-                HAL_SPI_Transmit_IT(&hspi1, spi_tx, 2);
+            uint16_t second = first; //if only one sample exists
+
+            //another sample exists -> use it
+            if (tail != head) {
+                second = buffer[tail];
+                tail = (tail + 1) % BUFF_SIZE;
             }
+
+            uint16_t avg = (first + second) / 2;
+
+            int diff = (int)avg - (int)runningMean;
+
+            if (abs(diff) > 100) {
+                avg = lastValid;
+            } else{
+                lastValid = avg;
+            }
+
+            runningMean = ((runningMean * 15) + avg) / 16;
+
+            prevAvg = avg;
+            tx = (uint8_t)(avg >> 2);
+
+            if (huart2.gState == HAL_UART_STATE_READY) {
+                if (!triggerMode || transmit) {
+                    HAL_GPIO_WritePin(Measure_GPIO_Port, Measure_Pin, 1);
+                    HAL_UART_Transmit_IT(&huart2, (uint8_t*)&tx, 1);
+                }
+            }
+        }
+    }
+}
+
+//activates every time the echo pin changes state
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == Echo_Pin) {
+        uint32_t now = __HAL_TIM_GET_COUNTER(&htim16);
+
+        if (echoState == 0) {
+            //starts on low -> must be rising edge
+            riseTime = now;
+            echoState = 1;
+        } else {
+            //must be falling edge, because it was already high
+            fallTime = now;
+
+            uint16_t pulse = (uint16_t)(fallTime - riseTime);
+            distance = pulse/58;
+
+            echoState = 0; //reset
+        }
+    }
+}
+
+void send_trigger(void){
+    HAL_GPIO_WritePin(Trigger_GPIO_Port, Trigger_Pin, 1);
+
+    //schedule turning the trigger off in 10 microseconds
+    lastTrigger = __HAL_TIM_GET_COUNTER(&htim16);
+    triggerRequest = 1;
+}
+void process_trigger(void) {
+    if (triggerRequest) {
+        uint32_t now = __HAL_TIM_GET_COUNTER(&htim16);
+
+        //turn the trigger off if 10 microseconds have passed
+        //creates pulse to be echoed
+        if ((uint16_t)(now - lastTrigger) >= 10) {
+            HAL_GPIO_WritePin(Trigger_GPIO_Port, Trigger_Pin, 0);
+            triggerRequest = 0;
         }
     }
 }
@@ -127,22 +208,62 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_USART2_UART_Init();
-  MX_ADC1_Init();
   MX_SPI1_Init();
   MX_TIM1_Init();
-  MX_TIM2_Init();
+  MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
-  //HAL_TIM_Base_Start(&htim16);
-  HAL_TIM_Base_Start(&htim1);
-  HAL_TIM_Base_Start_IT(&htim2);
+  HAL_TIM_Base_Start_IT(&htim1);
+  HAL_TIM_Base_Start(&htim16);
 
-  HAL_ADC_Start_DMA(&hadc1, data, 1);
+  HAL_SPI_Receive_DMA(&hspi1, data, 2);
+  HAL_UART_Receive_IT(&huart2, uartData, 1);
+
+  uint32_t last_cycle = 0;
+  int closeCount = 0;
+  int farCount = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      //only operate in distance trigger mode if python sends signal
+      if (triggerMode == 1){
+
+          //shut off trigger to create pulse
+          process_trigger();
+
+          uint32_t now = __HAL_TIM_GET_COUNTER(&htim16);
+
+          //begin making trigger pulse every 60ms
+          if ((uint16_t)(now - last_cycle) >= 60000){
+              send_trigger();
+              last_cycle = now;
+          }
+
+          //set recording state if distance is short enough
+          //debounce logic: need 8 consecutive values to verify change of distance, to counteract spiking
+          if (distance < 10) {
+              closeCount++;
+              farCount = 0;
+
+              if (closeCount >= 8){
+                  //HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 1);
+                  transmit = 1;
+
+              }
+          } else{
+
+              farCount++;
+              closeCount = 0;
+
+              if (farCount >= 8){
+                  //HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 0);
+                  transmit = 0;
+
+              }
+          }
+      }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -211,64 +332,6 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief ADC1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC1_Init(void)
-{
-
-  /* USER CODE BEGIN ADC1_Init 0 */
-
-  /* USER CODE END ADC1_Init 0 */
-
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC1_Init 1 */
-
-  /* USER CODE END ADC1_Init 1 */
-
-  /** Common config
-  */
-  hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
-  hadc1.Init.Resolution = ADC_RESOLUTION_10B;
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  hadc1.Init.LowPowerAutoWait = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.NbrOfConversion = 1;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIG_T1_TRGO;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
-  hadc1.Init.DMAContinuousRequests = ENABLE;
-  hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
-  hadc1.Init.OversamplingMode = DISABLE;
-  if (HAL_ADC_Init(&hadc1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Regular Channel
-  */
-  sConfig.Channel = ADC_CHANNEL_6;
-  sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
-  sConfig.SingleDiff = ADC_SINGLE_ENDED;
-  sConfig.OffsetNumber = ADC_OFFSET_NONE;
-  sConfig.Offset = 0;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN ADC1_Init 2 */
-
-  /* USER CODE END ADC1_Init 2 */
-
-}
-
-/**
   * @brief SPI1 Initialization Function
   * @param None
   * @retval None
@@ -285,19 +348,18 @@ static void MX_SPI1_Init(void)
   /* USER CODE END SPI1_Init 1 */
   /* SPI1 parameter configuration*/
   hspi1.Instance = SPI1;
-  hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.Mode = SPI_MODE_SLAVE;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES_RXONLY;
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi1.Init.CRCPolynomial = 7;
   hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
   if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
@@ -329,7 +391,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 725;
+  htim1.Init.Period = 1450;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -342,7 +404,7 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
@@ -356,47 +418,34 @@ static void MX_TIM1_Init(void)
 }
 
 /**
-  * @brief TIM2 Initialization Function
+  * @brief TIM16 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM2_Init(void)
+static void MX_TIM16_Init(void)
 {
 
-  /* USER CODE BEGIN TIM2_Init 0 */
+  /* USER CODE BEGIN TIM16_Init 0 */
 
-  /* USER CODE END TIM2_Init 0 */
+  /* USER CODE END TIM16_Init 0 */
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  /* USER CODE BEGIN TIM16_Init 1 */
 
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 725;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  /* USER CODE END TIM16_Init 1 */
+  htim16.Instance = TIM16;
+  htim16.Init.Prescaler = 31;
+  htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim16.Init.Period = 65535;
+  htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim16.Init.RepetitionCounter = 0;
+  htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim16) != HAL_OK)
   {
     Error_Handler();
   }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
+  /* USER CODE BEGIN TIM16_Init 2 */
 
-  /* USER CODE END TIM2_Init 2 */
+  /* USER CODE END TIM16_Init 2 */
 
 }
 
@@ -416,7 +465,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 921600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -445,12 +494,9 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-  /* DMA1_Channel3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
+  /* DMA1_Channel2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
 
 }
 
@@ -472,7 +518,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, Measure_Pin|Trigger_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : Measure_Pin Trigger_Pin */
+  GPIO_InitStruct.Pin = Measure_Pin|Trigger_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD3_Pin */
   GPIO_InitStruct.Pin = LD3_Pin;
@@ -481,33 +537,51 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD3_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : Echo_Pin */
+  GPIO_InitStruct.Pin = Echo_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(Echo_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
+
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
+    //HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+    uint16_t val = (data[0] << 8) | data[1];
     uint16_t next = (head + 1) % BUFF_SIZE;
 
+    //store if buffer isn't full
     if (next != tail) {
-        buffer[head] = data[0];
+        buffer[head] = val;
         head = next;
     }
 
-//    if (hspi1.State == HAL_SPI_STATE_READY) {
-//        HAL_SPI_Transmit_DMA(&hspi1, &spi_tx, 1);
-//    	//HAL_SPI_Transmit_IT(&hspi1, &spi_tx, 1);
-//    }
-//	  int time = __HAL_TIM_GET_COUNTER(&htim16);
-//	  if (time >= 100){
-//
-//          if (hspi1.State == HAL_SPI_STATE_READY) {
-//              HAL_SPI_Transmit_DMA(&hspi1, (uint8_t*)data, 1);
-//          }
-//
-//		  __HAL_TIM_SET_COUNTER(&htim16, 0);
-//	  }
+    HAL_SPI_Receive_DMA(&hspi1, data, 2);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    HAL_UART_Receive_IT(&huart2, uartData, 1);
+    if (uartData[0] == 1){
+        triggerMode = 1;
+    } else if (uartData[0] == 0){
+        triggerMode = 0;
+    }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART2){
+        //for measuring output rate
+        HAL_GPIO_WritePin(Measure_GPIO_Port, Measure_Pin, 0);
+    }
 }
 /* USER CODE END 4 */
 

@@ -1,0 +1,146 @@
+sampling stm32
+
+tim1:
+
+    clock source: internal clock
+
+    prescaler: 0
+
+    counter period: 725 (gives ~44077 Hz)
+
+    trigger event selection trgo: update event
+
+    nvic: all 4 interrupt boxes unchecked (no isr needed)
+
+tim2:
+
+    clock source: internal clock
+
+    prescaler: 0
+
+    counter period: 725
+
+    nvic: tim2 global interrupt enabled (triggers spi transmit)
+
+adc1:
+
+    in6 single-ended
+
+    resolution: adc 10-bit resolution (values 0-1023)
+
+    data alignment: right
+
+    external trigger conversion source: timer 1 trigger out event
+
+    external trigger edge: rising
+
+    continuous conversion mode: disabled
+
+    dma continuous requests: enabled
+
+    overrun: data preserved
+
+    nvic: adc1 global interrupt disabled
+
+spi1:
+
+    mode: transmit only master
+
+    data size: 8 bits
+
+    clock polarity: low, phase: 1 edge
+
+    baud rate prescaler: 2 (spi clock = 16 mhz)
+
+    nss: software, pulse enable
+
+    first bit: msb
+
+    crc: disabled
+
+    project manager ->  hal 
+uart2:
+
+    mode: asynchronous
+
+    baud rate: 115200
+
+    word length: 8, parity: none, stop: 1
+
+    nvic: both interrupt boxes unchecked
+
+dma:
+
+    dma1 channel 1: adc1, circular, peripheral to memory
+
+    dma1 channel 3: spi1 tx, normal, memory to peripheral
+
+clock:
+
+    32 mhz system clock from pll/msi
+
+    all bus clocks 32 mhz
+
+processing stm32
+
+tim1:
+
+    clock source: internal clock
+
+    prescaler: 0
+
+    counter period: 1450 (triggers at ~22054 Hz)
+
+    nvic: all 4 interrupt boxes enabled (calls hal_tim_periodelapsedcallback)
+
+tim16:
+
+    clock source: internal clock
+
+    prescaler: 31 (tick = 1 us)
+
+    counter period: 65535
+
+    nvic: all interrupts disabled (polled with get_counter)
+
+spi1:
+
+    mode: receive only slave
+
+    data size: 8 bits
+
+    clock polarity: low, phase: 1 edge
+
+    nss: software, pulse disable
+
+    crc: disabled
+
+    driver: hal
+
+uart2:
+
+    mode: asynchronous
+
+    baud rate: 921600
+
+    word length: 8, parity: none, stop: 1
+
+    nvic: uart2 global interrupt enabled (needed to read start/stop commands)
+
+dma:
+
+    dma1 channel 2: spi1 rx, circular, peripheral to memory
+
+gpio/exti:
+
+    echo pin: gpio_exti, trigger on both edges, exti9_5 interrupt enabled
+
+    trigger pin: gpio output
+
+    measure pin: gpio output
+
+    ld3: gpio output
+
+clock:
+
+    32 mhz system/bus clocks (same as sampling)
