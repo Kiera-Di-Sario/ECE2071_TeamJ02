@@ -8,12 +8,12 @@ import wave
 
 import time
 
-
+#230400
 devices = serial.tools.list_ports.comports()
-ser = serial.Serial("COM5", 230400, timeout=0.2)
+ser = serial.Serial("COM5", 921600, timeout=0.2)
 
 audio = []
-SAMPLE_RATE = 7900 
+SAMPLE_RATE = 22000
 
 #first output file will be triggered by data still being sent before python tells it to stop
 #it should be discarded

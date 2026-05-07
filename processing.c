@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdlib.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,39 +41,48 @@
 
 /* Private variables ---------------------------------------------------------*/
 SPI_HandleTypeDef hspi1;
+DMA_HandleTypeDef hdma_spi1_rx;
 
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim16;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+#define BUFF_SIZE 128
+
+volatile uint8_t buffer[BUFF_SIZE];
+volatile uint16_t head = 0;  //writing
+volatile uint16_t tail = 0;  //reading
+
+uint8_t lastValid;
+uint8_t runningMean = 128;
+uint8_t prevAvg = 0;
+
 uint8_t data[1];
 uint8_t uartData[1];
+volatile uint8_t tx;
 
-uint8_t current = 0;
-uint8_t prev = 0;
-uint8_t avg = 0;
-
-volatile int triggerMode = 0;
-volatile int transmit = 0;
+volatile uint8_t triggerMode = 0;
+volatile uint8_t transmit = 0;
 
 volatile int echoState = 0;
 volatile uint32_t riseTime = 0;
 volatile uint32_t fallTime = 0;
 
-volatile float distance = 0;
+volatile int distance = 0;
 
-volatile int triggerRequest = 0;
+volatile uint8_t triggerRequest = 0;
 volatile uint32_t lastTrigger = 0;
-
-int counter_for_debugging = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_TIM1_Init(void);
 static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
 
@@ -81,6 +90,49 @@ static void MX_TIM16_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+//circular buffer to prevent data loss (not perfectly synchronised)
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
+    if (htim->Instance == TIM1) {
+
+    	//unread sample in the queue
+        if (tail != head) {
+
+            //read first sample
+            uint8_t first = buffer[tail];
+            //set the tail to the next position
+            tail = (tail + 1) % BUFF_SIZE;
+
+            uint8_t second = first; //if only one sample exists
+
+            //another sample exists -> use it
+            if (tail != head) {
+                second = buffer[tail];
+                tail = (tail + 1) % BUFF_SIZE;
+            }
+
+            uint8_t avg = (first + second) / 2;
+
+            int diff = (int)avg - (int)runningMean;
+
+            if (abs(diff) > 50) {
+                avg = lastValid;
+            } else{
+            	lastValid = avg;
+            }
+
+            runningMean = ((runningMean * 15) + avg) / 16;
+
+            prevAvg = avg;
+            tx = avg;
+
+            if (huart2.gState == HAL_UART_STATE_READY) {
+                if (!triggerMode || transmit) {
+                    HAL_UART_Transmit_IT(&huart2, &tx, 1);
+                }
+            }
+        }
+    }
+}
 
 //activates every time the echo pin changes state
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
@@ -95,9 +147,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
             //must be falling edge, because it was already high
             fallTime = now;
 
-            uint16_t pulse = fallTime - riseTime;
-
+            uint16_t pulse = (uint16_t)(fallTime - riseTime);
             distance = pulse/58;
+
             echoState = 0; //reset
         }
     }
@@ -122,7 +174,6 @@ void process_trigger(void) {
         }
     }
 }
-
 /* USER CODE END 0 */
 
 /**
@@ -154,19 +205,21 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
+  MX_TIM1_Init();
   MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
-  HAL_SPI_Receive_IT(&hspi1, data, 1);
-  HAL_UART_Receive_IT(&huart2, uartData, 1);
+  HAL_TIM_Base_Start_IT(&htim1);
   HAL_TIM_Base_Start(&htim16);
+
+  HAL_SPI_Receive_DMA(&hspi1, data, 1);
+  HAL_UART_Receive_IT(&huart2, uartData, 1);
 
   uint32_t last_cycle = 0;
   int closeCount = 0;
   int farCount = 0;
-
-  int recordingStart = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -194,36 +247,21 @@ int main(void)
 	    	  farCount = 0;
 
 	    	  if (closeCount >= 8){
-	    		  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 1);
+	    		  //HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 1);
 	    		  transmit = 1;
 
-	    		  if (recordingStart == 0){
-	    			  uint8_t num = 1;
-	    			  HAL_UART_Transmit_IT(&huart2, &num, 1);
-
-	    			  recordingStart = 1;
-	    		  }
 	    	  }
 	      } else{
+
 	    	  farCount++;
 	    	  closeCount = 0;
 
 	    	  if (farCount >= 8){
-	    		  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 0);
+	    		  //HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 0);
 	    		  transmit = 0;
 
-	    		  if (recordingStart == 1){
-					  //tell python to end recording period
-	    			  uint8_t num = 4;
-	    			  HAL_UART_Transmit_IT(&huart2, &num, 1);
-
-					  recordingStart = 0;
-	    		  }
 	    	  }
 	      }
-	  } else{
-		  //light for debugging
-		  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, 0);
 	  }
     /* USER CODE END WHILE */
 
@@ -332,6 +370,53 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 31;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 43;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+
+}
+
+/**
   * @brief TIM16 Initialization Function
   * @param None
   * @retval None
@@ -379,7 +464,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 921600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -395,6 +480,22 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
 
 }
 
@@ -453,40 +554,24 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
-    if (hspi->Instance == SPI1) {
-            prev = current;
-            current = data[0];
+	HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+	uint16_t next = (head + 1) % BUFF_SIZE;
 
-            avg = (current + prev) / 2;
+    //store if buffer isn't full
+    if (next != tail) {
+        buffer[head] = data[0];
+        head = next;
+    }
 
-            //in trigger mode, only transmit if distance requirements met
-            if (triggerMode == 1){
-            	if (transmit == 1) {
-            		//HAL_UART_Transmit_IT(&huart2, &avg, 1);
-
-            		//for debugging
-	    			uint8_t num = 2;
-					HAL_UART_Transmit_IT(&huart2, &num, 2);
-            	}
-
-            } else { //in manual, always transmit
-            	HAL_UART_Transmit_IT(&huart2, &avg, 1);
-            }
-
-            //HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
-
-            HAL_SPI_Receive_IT(&hspi1, data, 1);
-        }
+    HAL_SPI_Receive_DMA(&hspi1, data, 1);
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance == USART2) {
-    	HAL_UART_Receive_IT(&huart2, uartData, 1);
-    	if (uartData[0] == 1){
-    		triggerMode = 1;
-    	} else if (uartData[0] == 0){
-    		triggerMode = 0;
-    	}
+    HAL_UART_Receive_IT(&huart2, uartData, 1);
+    if (uartData[0] == 1){
+    	triggerMode = 1;
+    } else if (uartData[0] == 0){
+    	triggerMode = 0;
     }
 }
 /* USER CODE END 4 */
