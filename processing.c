@@ -127,7 +127,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
             if (huart2.gState == HAL_UART_STATE_READY) {
                 if (!triggerMode || transmit) {
-                    HAL_UART_Transmit_IT(&huart2, &tx, 1);
+                	HAL_GPIO_WritePin(Measure_GPIO_Port, Measure_Pin, 1);
+                    HAL_UART_Transmit_IT(&huart2, (uint8_t*)&tx, 1);
                 }
             }
         }
@@ -517,17 +518,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(Trigger_GPIO_Port, Trigger_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, Measure_Pin|Trigger_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : Trigger_Pin */
-  GPIO_InitStruct.Pin = Trigger_Pin;
+  /*Configure GPIO pins : Measure_Pin Trigger_Pin */
+  GPIO_InitStruct.Pin = Measure_Pin|Trigger_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(Trigger_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD3_Pin */
   GPIO_InitStruct.Pin = LD3_Pin;
@@ -554,7 +555,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
-	HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+	//HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 	uint16_t next = (head + 1) % BUFF_SIZE;
 
     //store if buffer isn't full
@@ -572,6 +573,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     	triggerMode = 1;
     } else if (uartData[0] == 0){
     	triggerMode = 0;
+    }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART2){
+    	//for measuring output rate
+    	HAL_GPIO_WritePin(Measure_GPIO_Port, Measure_Pin, 0);
     }
 }
 /* USER CODE END 4 */
