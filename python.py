@@ -8,7 +8,7 @@ import wave
 
 import time
 
-#230400
+
 devices = serial.tools.list_ports.comports()
 ser = serial.Serial("COM5", 921600, timeout=0.2)
 
