@@ -49,7 +49,7 @@ TIM_HandleTypeDef htim16;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-#define BUFF_SIZE 128
+#define BUFF_SIZE 256
 
 volatile uint8_t buffer[BUFF_SIZE];
 volatile uint16_t head = 0;  //writing
