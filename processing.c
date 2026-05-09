@@ -130,10 +130,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
             tx = avg;
 
-            if (huart2.gState == HAL_UART_STATE_READY) {
-                if (!triggerMode || transmit) {
-                    HAL_UART_Transmit_IT(&huart2, &tx, 1);
-                }
+            if (!triggerMode || transmit) {
+                HAL_UART_Transmit_IT(&huart2, &tx, 1);
             }
         }
     }
