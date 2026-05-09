@@ -97,9 +97,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
         //unread sample in the queue
         if (tail != head) {
 
-            //read first sample and mask to valid 10-bits immediately 
+            //read first sample and mask to valid 10 bits immediately 
             uint16_t first = buffer[tail] & 0x03FF;
-            //set the tail to the next position using bitwise AND for speed
+            //set the tail to the next position using AND
             tail = (tail + 1) & 255;
 
             uint16_t second = first; //if only one sample exists
@@ -121,14 +121,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
             int16_t diff = (int16_t)avg - (int16_t)runningMean;
 
-            //avoid function call to abs()
+            //fast outlier reject
             if (diff > 200 || diff < -200) {
                 avg = lastValid;
             } else{
                 lastValid = avg;
             }
 
-            //replaces: ((runningMean * 15) + avg) / 16
+            // = ((runningMean * 15) + avg) / 16
             runningMean = ((runningMean << 4) - runningMean + avg) >> 4;
 
             //rescale 10-bit (0-1023) to 8-bit (0-255)
@@ -625,4 +625,3 @@ void assert_failed(uint8_t *file, uint32_t line)
 }
 #endif /* USE_FULL_ASSERT */
 
-}

@@ -83,7 +83,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
             //get first sample
             spi_tx = buffer[tail];
-            //set the tail to the next position via fast bitwise wrap
+            //set the tail to the next position bitwise
             tail = (tail + 1) & 255;
 
             if (hspi1.State == HAL_SPI_STATE_READY) {
@@ -485,7 +485,7 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
-    //fast bitwise wrap
+    //fast bitwise
     uint16_t next = (head + 1) & 255;
 
     if (next != tail) {
@@ -527,4 +527,3 @@ void assert_failed(uint8_t *file, uint32_t line)
 }
 #endif /* USE_FULL_ASSERT */
 
-}
