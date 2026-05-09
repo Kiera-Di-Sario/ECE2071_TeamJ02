@@ -54,11 +54,11 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 #define BUFF_SIZE 128
 
-volatile uint8_t buffer[BUFF_SIZE];
+volatile uint16_t buffer[BUFF_SIZE];
 volatile uint16_t head = 0;  //writing
 volatile uint16_t tail = 0;  //reading
 
-uint32_t data[1];
+uint16_t data[1];
 uint8_t spi_tx;
 /* USER CODE END PV */
 
@@ -82,9 +82,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
         if (tail != head) {
 
             //get first sample
-        	spi_tx = buffer[tail];
+        	uint16_t currentData = buffer[tail];
             //set the tail to the next position
             tail = (tail + 1) % BUFF_SIZE;
+
+            //rescale 10-bit (0-1023) to 8-bit (0-255)
+            spi_tx = (uint8_t)(currentData >> 2);
+
 
             if (hspi1.State == HAL_SPI_STATE_READY) {
                 HAL_SPI_Transmit_IT(&hspi1, &spi_tx, 1);
@@ -231,7 +235,7 @@ static void MX_ADC1_Init(void)
   */
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
-  hadc1.Init.Resolution = ADC_RESOLUTION_8B;
+  hadc1.Init.Resolution = ADC_RESOLUTION_10B;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
