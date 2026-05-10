@@ -8,7 +8,6 @@ import wave
 
 import time
 
-#230400
 devices = serial.tools.list_ports.comports()
 ser = serial.Serial("COM5", 921600, timeout=0.2)
 
@@ -32,9 +31,9 @@ def to_wav(data, ver = -1):
     data = data.astype(np.uint8)
 
     if ver == -1:
-        filename = 'sound.wav'
+        filename = f'J01_sound_{SAMPLE_RATE}.wav'
     else:
-        filename = f'sound_{ver}.wav'
+        filename = f'J01_sound_{ver}_{SAMPLE_RATE}.wav'
 
     with wave.open(filename, 'wb') as wf:
         wf.setnchannels(1)
@@ -65,9 +64,9 @@ def to_png(data, recordingLength, ver = -1):
     plt.ylim(0, 255)
 
     if ver == -1:
-        plt.savefig("waveform.png")
+        plt.savefig(f"J02_waveform_{SAMPLE_RATE}.png")
     else:
-        plt.savefig(f"waveform_{ver}.png")
+        plt.savefig(f"J02_waveform_{ver}_{SAMPLE_RATE}.png")
 
 def to_csv(data, ver = -1):
     '''
@@ -80,9 +79,9 @@ def to_csv(data, ver = -1):
     '''
     data = np.insert(data, 0, SAMPLE_RATE)
     if ver == -1:
-        np.savetxt("raw_data.csv", data, delimiter=",", fmt="%03d")
+        np.savetxt(f"J02_raw_data_{SAMPLE_RATE}.csv", data, delimiter=",", fmt="%03d")
     else:
-        np.savetxt(f"raw_data_{ver}.csv", data, delimiter=",", fmt="%03d")
+        np.savetxt(f"J02_raw_data_{ver}_{SAMPLE_RATE}.csv", data, delimiter=",", fmt="%03d")
 
 
 outputType = input("Output type (w for .wav, p for .png, c for .csv): ")
@@ -96,7 +95,6 @@ if recordingType == "m":
 
     for i in range(recordingLength*SAMPLE_RATE):
         readData = ser.read(1) 
-        #print(readData[0])
         audio.append(readData[0])
         
     

@@ -591,7 +591,6 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
-	//HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 	uint16_t next = (head + 1) % BUFF_SIZE;
 
     //store if buffer isn't full
