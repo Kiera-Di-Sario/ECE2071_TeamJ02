@@ -40,4 +40,6 @@ This repository contains versions of code made by each team member. This is mana
 
 ## Version History of Main
 **Initial Commit**
-- Created base repository with individual and group_project branches
+- Created base repository with main and individual group member branches
+**Final Code**
+- All versions of the final code were pushed to the main branch
